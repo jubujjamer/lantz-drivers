@@ -168,6 +168,8 @@ class QHY(LibraryDriver):
         cam_mode = ct.c_int(value)
         self.lib.set_stream_mode.argtypes = [ct.c_void_p, ct.c_int]
         ret_value = self.lib.set_stream_mode(self.handler, cam_mode)
+        if ret_value not in _ERRORS.keys() and 'value' == 'live':
+            self.lib.init_live_mode(self.handler)
         return ret_value
 
     @Feat(limits=(50, 3600E6))
@@ -439,9 +441,10 @@ if __name__ == '__main__':
         qhy.get_ccd_info()
         qhy.is_color()
         qhy.set_roi()
-        qhy._expose()
-        # print('Taking image %i' % i)
-        img = qhy.get_frame()
+        for i in range(3):
+            qhy._expose()
+            print('Taking image %i' % i)
+            img = qhy.get_frame()
         qhy.finalize()
 
     plt.imshow(img, cmap='gray', interpolation='None')
