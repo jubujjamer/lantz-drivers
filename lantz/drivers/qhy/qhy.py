@@ -13,8 +13,9 @@
     :copyright: 2015 by Lantz Authors, see AUTHORS for more details.
     :license: BSD, see LICENSE for more details.
 """
-
 import ctypes as ct
+import numpy as np
+
 
 from lantz import Driver, Feat, Action, Q_
 from lantz import errors
@@ -62,11 +63,15 @@ _ERRORS = {
 class QHY(LibraryDriver):
 
     LIBRARY_NAME = 'qhy.so'
+    # LIBRARY_NAME = 'libopencv_reg.so'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.cam_idx = 0
         self.cam_id = None
+        self.size_x = None
+        self.size_y = None
+        self._length = None
     # def _return_handler(self, func_name, ret_value):
     #     if ret_value != 0:
     #         raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
@@ -80,6 +85,10 @@ class QHY(LibraryDriver):
         self.cam_id = self.camera_id(self.cam_idx)
         self.handler = self.open(self.cam_id)
         self.stream_mode = stream_mode
+        self._x0 = 0
+        self._y0 = 0
+        self._roix = 5544
+        self._roiy = 3684
         self.init_camera()
 
     @Action()
@@ -132,10 +141,6 @@ class QHY(LibraryDriver):
         handler         qhyccd_handle (qhydevice.h typedef)
                         Camera handler
         """
-        # if not self.cam_id:
-        #     id = cam_id
-        # else:
-        #     id = self.cam_id
         self.lib.open_camera.restype = ct.c_void_p
         handler = self.lib.open_camera(cam_id)
         return handler
@@ -218,6 +223,13 @@ class QHY(LibraryDriver):
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
+    @Feat(limits=(-5, 10))
+    def temperature(self):
+        self.lib.get_temperature.argtypes = [ct.c_void_p]
+        temperature = self.lib.get_temperature(self.handler)
+        # dc = Q_(1, 'celsius') # Doesn't work
+        temperature = temperature
+        return temperature
 
     @Feat(values={'12MHz': 0, '24MHz': 1, '48MHz': 2})
     def control_speed(self):
@@ -239,8 +251,46 @@ class QHY(LibraryDriver):
         ret_value = self.lib.set_control_speed(self.handler, cmos_speed)
         return ret_value
 
+    @Feat(limits=(0,5544, 1))
+    def start_x(self):
+        return self._x0
 
-    def roi(self, start_x=0, start_y=0, size_x=5544, size_y=3684):
+    @start_x.setter
+    def start_x(self, start_x=0):
+        self._x0 = start_x
+
+    @Feat(limits=(0,3684, 1))
+    def start_y(self):
+        return self._y0
+
+    @start_y.setter
+    def start_y(self, start_y=0):
+        self._y0 = start_y
+
+    @Feat(limits=(0,5544, 1))
+    def roix(self):
+        return self._roix
+
+    @roix.setter
+    def roix(self, roix=5544):
+        self._roix = roix
+
+    @Feat(limits=(0, 3684, 1))
+    def roiy(self):
+        return self._roiy
+
+    @roiy.setter
+    def roiy(self, roiy=3684):
+        self._roiy = roiy
+
+    # def set_roi(self, start_x=0, start_y=0, size_x=5544, size_y=3684):
+    # @Action
+    def set_roi(self):
+        start_x = self.start_x
+        start_y = self.start_y
+        size_x = self.roix
+        size_y = self.roiy
+        print(start_x, start_y, size_x, size_y)
         self.lib.set_resolution.argtypes = [ct.c_void_p, ct.c_int, ct.c_int,
                                             ct.c_int, ct.c_int]
         ret_value = self.lib.set_resolution(self.handler, start_x, start_y,
@@ -249,15 +299,18 @@ class QHY(LibraryDriver):
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
-    @property
-    def bin_mode(self):
-        return 0
+    @Feat(limits=(1, 2, 1))
+    def binning(self):
+        return self.bins
 
-    @bin_mode.setter
-    def bin_mode(self, vals):
-        bin_x, bin_y = vals
+    @binning.setter
+    def binning(self, bins=1):
+        self.bins = bins
+        if bins >= 2:
+            self.roix = min(self.roix, 5544//bins)
+            self.roiy = min(self.roiy, 5544//bins)
         self.lib.set_bin_mode.argtypes = [ct.c_void_p, ct.c_int, ct.c_int]
-        ret_value = self.lib.set_bin_mode(self.handler, bin_x, bin_y)
+        ret_value = self.lib.set_bin_mode(self.handler, bins, bins)
         if ret_value not in _OK.keys():
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
@@ -276,18 +329,13 @@ class QHY(LibraryDriver):
 
     @property
     def _memory_length(self):
-        self.lib.get_memory_length.argtypes = [ct.c_void_p]
-        length = self.lib.get_memory_length(self.handler)
-        # if ret_value not in _OK.keys():
-        #     raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
-        return length
-
-    # def _memory_length(self):
-    #     self.lib.get_memory_length.argtypes = [ct.c_void_p]
-    #     ret_value = self.lib.get_memory_length(self.handler)
-    #     if ret_value not in _OK.keys():
-    #         raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
-    #     return ret_value
+        if not self._length:
+            self.lib.get_memory_length.argtypes = [ct.c_void_p]
+            length = self.lib.get_memory_length(self.handler)
+            self._length = length
+            if length in _ERRORS.keys():
+                raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
+        return self._length
 
     def get_ccd_info(self):
         # int_array = ct.c_int_p
@@ -308,6 +356,7 @@ class QHY(LibraryDriver):
         self.height_px = height_px * px
         self.max_x = int(max_x)
         self.max_y = int(max_y)
+        self.bits = bpp
         return chip_info
 
     def is_color(self):
@@ -319,64 +368,82 @@ class QHY(LibraryDriver):
 
     @Action()
     def _expose(self):
-        self.lib.get_single_frame.argtypes = [ct.c_void_p]
-        ret_value = self.lib.get_single_frame(self.handler)
-        # if ret_value not in _OK.keys():
-        #     raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
+        self.lib.expose_frame.argtypes = [ct.c_void_p]
+        ret_value = self.lib.expose_frame(self.handler)
+        if ret_value not in _OK.keys():
+            raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
     @Action()
-    def get_frame(self, roi_x, roi_y):
+    def get_frame(self):
+        """ Get one frame from buffer.
+
+        In the example app they use length = _memory_length which is equivalent
+        to 3*5544*3684. I suspect that RGB cameras are 8 bit and mono 16, so
+        this value covers them all.
+        """
+        bins = self.bins
+        roi_x = self.roix//bins
+        roi_y = self.roiy//bins
+        np_size = roi_x*roi_y
         length = self._memory_length
-        char_array = ct.c_int16*(length)
+        char_array = ct.c_ubyte*(length)
         self.lib.get_single_frame.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_int]
         self.lib.get_single_frame.restype = ct.POINTER(char_array)
-        print('length', length)
         p_img_data = self.lib.get_single_frame(self.handler, roi_x, roi_y, length)
-        img = np.copy(np.frombuffer(p_img_data.contents))
-        print(len(img))
-        print(img.resize(5544, 3684))
-        return p_img_data
+        # img = np.frombuffer(p_img_data.contents, dtype = np.uint16)
+        img = np.frombuffer(p_img_data.contents, dtype = np.dtype('<u2'))
+        image = np.copy(img[:np_size])
+        return image.reshape(roi_y, roi_x)
 
     @Action()
-    def cancel_exposure(self):
+    def _cancel_exposure(self):
         self.lib.cancel_exposure.argtypes = [ct.c_void_p]
         ret_value = self.lib.cancel_exposure(self.handler)
         if ret_value not in _OK.keys():
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
-
     @Action()
-    def close(self):
+    def _close(self):
         """Close camera self.initialize.
         """
         self.lib.close_camera(self.handler)
 
     def finalize(self):
-        """Finalize Library. Concluding function.
+        """Cancel exposure and close camera and SDK.
+
         """
-        self.close()
+        self._cancel_exposure()
+        self._close()
         self.lib.release()
 
 if __name__ == '__main__':
-    import numpy as np
-    # import ct as ct
     from matplotlib import pyplot as plt
+    from lantz.qt.widgets import testgui
 
     with QHY() as qhy:
         qhy.initialize(stream_mode='single')
-        qhy.exposure = 100000
-        qhy.gain = 30
-        qhy.offset = 100
+        qhy.exposure = 50000
+        qhy.gain = 0
+        qhy.offset = 50
         qhy.usb_traffic = 10
         qhy.control_speed = '12MHz'
-        qhy.roi(0, 0, 500, 500)
-        qhy.bin_mode = (1, 1)
+        qhy.binning = 1
         qhy.bits_mode = 16
+        print(qhy.temperature)
+        # qhy.roix = 500
+        # qhy.roiy = 500
+        # qhy.start_x = 0
+        # qhy.start_y = 0
         qhy.get_ccd_info()
         qhy.is_color()
+        qhy.set_roi()
         qhy._expose()
-        img = qhy.get_frame(roi_x=qhy.max_x, roi_y=qhy.max_x)
-        qhy.close()
+        # print('Taking image %i' % i)
+        img = qhy.get_frame()
         qhy.finalize()
+
+    plt.imshow(img, cmap='gray', interpolation='None')
+    plt.colorbar()
+    plt.show()
