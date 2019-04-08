@@ -15,11 +15,13 @@
 """
 import ctypes as ct
 import numpy as np
-
+import time
+from time import process_time
 
 from lantz import Driver, Feat, Action, Q_
 from lantz import errors
 from lantz.core.foreign import LibraryDriver
+
 
 _OK = {
     7: 'QHYCCD_QGIGAE',
@@ -62,7 +64,7 @@ _ERRORS = {
 
 class QHY(LibraryDriver):
 
-    LIBRARY_NAME = 'qhy.so'
+    LIBRARY_NAME = './qhy.so'
     # LIBRARY_NAME = 'libopencv_reg.so'
 
     def __init__(self, *args, **kwargs):
@@ -90,6 +92,8 @@ class QHY(LibraryDriver):
         self._roix = 5544
         self._roiy = 3684
         self.init_camera()
+        self.lib.get_single_frame.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_int]
+        # self.lib.get_single_frame.restype = ct.POINTER(ct.c_ubyte*(61272288))
 
     @Action()
     def scan_cameras(self):
@@ -154,7 +158,7 @@ class QHY(LibraryDriver):
 
     @Feat(values={'single': 0, 'live': 1})
     def stream_mode(self):
-        return self.stream_mode
+        return self._stream_mode
 
     @stream_mode.setter
     def stream_mode(self, value='single'):
@@ -165,6 +169,8 @@ class QHY(LibraryDriver):
         mode        int
                     0 for single frame mode and 1 for video mode.
         """
+        print('stream_mode', value)
+        self._stream_mode = value
         cam_mode = ct.c_int(value)
         self.lib.set_stream_mode.argtypes = [ct.c_void_p, ct.c_int]
         ret_value = self.lib.set_stream_mode(self.handler, cam_mode)
@@ -212,7 +218,7 @@ class QHY(LibraryDriver):
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
-    @Feat(limits=(1, 250)) #
+    @Feat(limits=(1, 250, 1)) #
     def usb_traffic(self):
         # Implement the getter
         return 0
@@ -286,13 +292,12 @@ class QHY(LibraryDriver):
         self._roiy = roiy
 
     # def set_roi(self, start_x=0, start_y=0, size_x=5544, size_y=3684):
-    # @Action
+    @Action()
     def set_roi(self):
         start_x = self.start_x
         start_y = self.start_y
         size_x = self.roix
         size_y = self.roiy
-        print(start_x, start_y, size_x, size_y)
         self.lib.set_resolution.argtypes = [ct.c_void_p, ct.c_int, ct.c_int,
                                             ct.c_int, ct.c_int]
         ret_value = self.lib.set_resolution(self.handler, start_x, start_y,
@@ -310,7 +315,7 @@ class QHY(LibraryDriver):
         self.bins = bins
         if bins >= 2:
             self.roix = min(self.roix, 5544//bins)
-            self.roiy = min(self.roiy, 5544//bins)
+            self.roiy = min(self.roiy, 3684//bins)
         self.lib.set_bin_mode.argtypes = [ct.c_void_p, ct.c_int, ct.c_int]
         ret_value = self.lib.set_bin_mode(self.handler, bins, bins)
         if ret_value not in _OK.keys():
@@ -331,10 +336,12 @@ class QHY(LibraryDriver):
 
     @property
     def _memory_length(self):
+        print('Memory setting')
         if not self._length:
             self.lib.get_memory_length.argtypes = [ct.c_void_p]
             length = self.lib.get_memory_length(self.handler)
             self._length = length
+            print('Length set at %d' % length)
             if length in _ERRORS.keys():
                 raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return self._length
@@ -368,31 +375,43 @@ class QHY(LibraryDriver):
         #     raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
-    @Action()
+    # @Action()
     def _expose(self):
+        s = self._memory_length
         self.lib.expose_frame.argtypes = [ct.c_void_p]
         ret_value = self.lib.expose_frame(self.handler)
         if ret_value not in _OK.keys():
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
 
-    @Action()
-    def get_frame(self):
+
+    # @Action()
+    @profile
+    def _get_frame(self, char_array, effective_roi_x, effective_roi_y, length):
         """ Get one frame from buffer.
 
         In the example app they use length = _memory_length which is equivalent
         to 3*5544*3684. I suspect that RGB cameras are 8 bit and mono 16, so
         this value covers them all.
         """
+        length = 2*effective_roi_x*effective_roi_y
+        self.lib.get_single_frame.restype = ct.POINTER(ct.c_ubyte*(length))
+        if self.stream_mode == 'single':
+            print('Calling length is %d' % length)
+            p_img_data = self.lib.get_single_frame(self.handler, effective_roi_x, effective_roi_y, length)
+        elif self.stream_mode == 'live':
+            p_img_data = self.lib.get_live_frame(self.handler, effective_roi_x, effective_roi_y, length)
+        return p_img_data
+
+    @Action()
+    def get_frame(self):
         bins = self.bins
         roi_x = self.roix//bins
         roi_y = self.roiy//bins
-        np_size = roi_x*roi_y
         length = self._memory_length
         char_array = ct.c_ubyte*(length)
-        self.lib.get_single_frame.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_int]
-        self.lib.get_single_frame.restype = ct.POINTER(char_array)
-        p_img_data = self.lib.get_single_frame(self.handler, roi_x, roi_y, length)
+        p_img_data = self._get_frame(char_array, roi_x, roi_y, length)
+        np_size = roi_x*roi_y
         # img = np.frombuffer(p_img_data.contents, dtype = np.uint16)
         img = np.frombuffer(p_img_data.contents, dtype = np.dtype('<u2'))
         image = np.copy(img[:np_size])
@@ -401,7 +420,10 @@ class QHY(LibraryDriver):
     @Action()
     def _cancel_exposure(self):
         self.lib.cancel_exposure.argtypes = [ct.c_void_p]
-        ret_value = self.lib.cancel_exposure(self.handler)
+        if self.stream_mode == 'single':
+            ret_value = self.lib.cancel_exposure(self.handler)
+        elif self.stream_mode == 'live':
+            ret_value = self.lib.stop_live_capture(self.handler)
         if ret_value not in _OK.keys():
             raise errors.InstrumentError('{} ({})'.format(ret_value, _ERRORS[ret_value]))
         return ret_value
@@ -421,32 +443,31 @@ class QHY(LibraryDriver):
         self.lib.release()
 
 if __name__ == '__main__':
+    import matplotlib
+    matplotlib.use('TkAgg')
     from matplotlib import pyplot as plt
     from lantz.qt.widgets import testgui
 
     with QHY() as qhy:
-        qhy.initialize(stream_mode='single')
-        qhy.exposure = 50000
-        qhy.gain = 0
-        qhy.offset = 50
-        qhy.usb_traffic = 10
-        qhy.control_speed = '12MHz'
+        qhy.initialize(stream_mode='singlec')
+        qhy.exposure = 50
+        qhy.gain = 10
+        qhy.offset = 10
+        qhy.usb_traffic = 1
+        qhy.control_speed = '48MHz'
         qhy.binning = 1
-        qhy.bits_mode = 16
+        qhy.bits_mode = 8
         print(qhy.temperature)
-        # qhy.roix = 500
-        # qhy.roiy = 500
+        qhy.roix = 2
+        qhy.roiy = 2
         # qhy.start_x = 0
         # qhy.start_y = 0
-        qhy.get_ccd_info()
+        # qhy.get_ccd_info()
         qhy.is_color()
         qhy.set_roi()
-        for i in range(3):
-            qhy._expose()
-            print('Taking image %i' % i)
-            img = qhy.get_frame()
+        qhy._expose()
+        img = qhy.get_frame()
         qhy.finalize()
-
+        # print(qhy.feats.binning.stats('set').mean)
     plt.imshow(img, cmap='gray', interpolation='None')
-    plt.colorbar()
     plt.show()
