@@ -456,8 +456,8 @@ if __name__ == '__main__':
         qhy.binning = 1
         qhy.bits_mode = 16
         # print(qhy.temperature)
-        qhy.roix = 2
-        qhy.roiy = 2
+        # qhy.roix = 2000
+        # qhy.roiy = 2000
         # qhy.start_x = 0
         # qhy.start_y = 0
         # qhy.get_ccd_info()
@@ -467,5 +467,5 @@ if __name__ == '__main__':
         img = qhy.get_frame()
         qhy.finalize()
         # print(qhy.feats.binning.stats('set').mean)
-    plt.imshow(img, cmap='gray', interpolation='None')
-    plt.show()
+        plt.imshow(img, cmap='gray', interpolation='None')
+        plt.show()
