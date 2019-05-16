@@ -64,7 +64,8 @@ _ERRORS = {
 
 class QHY(LibraryDriver):
 
-    LIBRARY_NAME = './qhy.so'
+    # LIBRARY_NAME = './qhy.so'
+    LIBRARY_NAME = '/usr/local/lib/qhy.so'
     # LIBRARY_NAME = 'libopencv_reg.so'
 
     def __init__(self, *args, **kwargs):
@@ -386,7 +387,6 @@ class QHY(LibraryDriver):
 
 
     # @Action()
-    @profile
     def _get_frame(self, char_array, effective_roi_x, effective_roi_y, length):
         """ Get one frame from buffer.
 
@@ -443,21 +443,19 @@ class QHY(LibraryDriver):
         self.lib.release()
 
 if __name__ == '__main__':
-    import matplotlib
-    matplotlib.use('TkAgg')
     from matplotlib import pyplot as plt
     from lantz.qt.widgets import testgui
 
     with QHY() as qhy:
-        qhy.initialize(stream_mode='singlec')
+        qhy.initialize(stream_mode='single')
         qhy.exposure = 50
         qhy.gain = 10
         qhy.offset = 10
         qhy.usb_traffic = 1
         qhy.control_speed = '48MHz'
         qhy.binning = 1
-        qhy.bits_mode = 8
-        print(qhy.temperature)
+        qhy.bits_mode = 16
+        # print(qhy.temperature)
         qhy.roix = 2
         qhy.roiy = 2
         # qhy.start_x = 0
