@@ -93,7 +93,7 @@ class QHY(LibraryDriver):
         self._roix = 5544
         self._roiy = 3684
         self.init_camera()
-        self.lib.get_single_frame.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.c_int]
+        self.lib.get_single_frame.argtypes = [ct.c_void_p, ct.c_int, ct.c_int, ct.POINTER(ct.c_ubyte), ct.c_int]
         # self.lib.get_single_frame.restype = ct.POINTER(ct.c_ubyte*(61272288))
 
     @Action()
@@ -394,14 +394,16 @@ class QHY(LibraryDriver):
         to 3*5544*3684. I suspect that RGB cameras are 8 bit and mono 16, so
         this value covers them all.
         """
-        length = 2*effective_roi_x*effective_roi_y
-        self.lib.get_single_frame.restype = ct.POINTER(ct.c_ubyte*(length))
+        length = effective_roi_x*effective_roi_y
+        img = np.empty((effective_roi_y, effective_roi_x), dtype=np.dtype('<u2'), order='C')
+        pimg = img.ctypes.data_as(ct.POINTER(ct.c_ubyte))
+        # self.lib.get_single_frame.restype = ct.POINTER(ct.c_ubyte*(length))
         if self.stream_mode == 'single':
             print('Calling length is %d' % length)
-            p_img_data = self.lib.get_single_frame(self.handler, effective_roi_x, effective_roi_y, length)
+            self.lib.get_single_frame(self.handler, effective_roi_x, effective_roi_y, pimg, length)
         elif self.stream_mode == 'live':
-            p_img_data = self.lib.get_live_frame(self.handler, effective_roi_x, effective_roi_y, length)
-        return p_img_data
+            self.lib.get_live_frame(self.handler, effective_roi_x, effective_roi_y, pimg, length)
+        return img
 
     @Action()
     def get_frame(self):
@@ -410,12 +412,13 @@ class QHY(LibraryDriver):
         roi_y = self.roiy//bins
         length = self._memory_length
         char_array = ct.c_ubyte*(length)
-        p_img_data = self._get_frame(char_array, roi_x, roi_y, length)
-        np_size = roi_x*roi_y
-        # img = np.frombuffer(p_img_data.contents, dtype = np.uint16)
-        img = np.frombuffer(p_img_data.contents, dtype = np.dtype('<u2'))
-        image = np.copy(img[:np_size])
-        return image.reshape(roi_y, roi_x)
+        return self._get_frame(char_array, roi_x, roi_y, length)
+        # p_img_data = self._get_frame(char_array, roi_x, roi_y, length)
+        # np_size = roi_x*roi_y
+        # # img = np.frombuffer(p_img_data.contents, dtype = np.uint16)
+        # img = np.frombuffer(p_img_data.contents, dtype = np.dtype('<u2'))
+        # image = np.copy(img[:np_size])
+        # return image.reshape(roi_y, roi_x)
 
     @Action()
     def _cancel_exposure(self):
@@ -446,10 +449,11 @@ if __name__ == '__main__':
     from matplotlib import pyplot as plt
     from lantz.qt.widgets import testgui
 
+
     with QHY() as qhy:
         qhy.initialize(stream_mode='single')
-        qhy.exposure = 50
-        qhy.gain = 10
+        qhy.exposure = 10000
+        qhy.gain = 20
         qhy.offset = 10
         qhy.usb_traffic = 1
         qhy.control_speed = '48MHz'
@@ -463,9 +467,18 @@ if __name__ == '__main__':
         # qhy.get_ccd_info()
         qhy.is_color()
         qhy.set_roi()
-        qhy._expose()
-        img = qhy.get_frame()
+
+        plt.ion()
+        fig, ax = plt.subplots(1, 1, figsize=[15, 12])
+        # fig.show()
+        # fig.canvas.draw()
+
+        while(True):
+            qhy._expose()
+            img = qhy.get_frame()
+            ax.cla()
+            ax.imshow(img, cmap='gray', interpolation='None')
+            plt.pause(.1)
+
         qhy.finalize()
         # print(qhy.feats.binning.stats('set').mean)
-        plt.imshow(img, cmap='gray', interpolation='None')
-        plt.show()
